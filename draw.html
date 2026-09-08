@@ -82,6 +82,7 @@
       let regions = [];
       let selectedRegionKey = null;
       let pointerAction = null;
+      let hideColoredRegions = false;
       let nextShapeId = 1;
 
       const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -512,11 +513,13 @@
         regionLayer.replaceChildren();
         regions.forEach((region) => {
           const element = createSvg('path');
+          const isHiddenDuringMove = hideColoredRegions && Boolean(region.color);
           element.setAttribute('d', region.d);
           element.setAttribute('fill-rule', 'evenodd');
           element.setAttribute('data-region-key', region.key);
-          element.setAttribute('fill', region.color || 'transparent');
-          element.style.pointerEvents = 'all';
+          element.setAttribute('fill', isHiddenDuringMove ? 'transparent' : (region.color || 'transparent'));
+          element.style.pointerEvents = isHiddenDuringMove ? 'none' : 'all';
+          element.style.visibility = isHiddenDuringMove ? 'hidden' : 'visible';
           regionLayer.append(element);
         });
       }
@@ -567,6 +570,8 @@
         if (hit) {
           pointerAction = { kind: 'move', pointerId: event.pointerId, shapeId: hit.shape.id, initialShape: copyShape(hit.shape), start: p };
           clearSelection();
+          hideColoredRegions = true;
+          renderRegions();
           event.preventDefault();
           return;
         }
@@ -599,7 +604,10 @@
           const draft = makeShapeFromDrag(mode, pointerAction.start, p);
           preview.hidden = true;
           if (draft) { shapes.push(draft); nextShapeId += 1; calculateRegions(); }
-        } else if (pointerAction.kind === 'move') calculateRegions();
+        } else if (pointerAction.kind === 'move') {
+          hideColoredRegions = false;
+          calculateRegions();
+        }
         pointerAction = null;
         if (board.hasPointerCapture(event.pointerId)) board.releasePointerCapture(event.pointerId);
       }

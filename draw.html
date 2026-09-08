@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cross Draw</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: #f3f4f6; color: #111827; }
+    .app { width: min(1240px, calc(100% - 32px)); margin: 24px auto; }
+    .toolbar { display: flex; align-items: center; gap: 8px; min-height: 60px; padding: 10px 12px; background: #fff; border: 1px solid #d1d5db; border-radius: 12px 12px 0 0; box-shadow: 0 5px 18px rgba(17,24,39,.06); }
+    .tool, .clear, .export { appearance: none; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1f2937; height: 38px; padding: 0 12px; cursor: pointer; font: inherit; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+    .tool { width: 44px; padding: 0; }
+    .tool:hover, .clear:hover, .export:hover { background: #f8fafc; }
+    .tool.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; box-shadow: inset 0 0 0 1px #2563eb; }
+    .tool svg { width: 21px; height: 21px; overflow: visible; }
+    .divider { width: 1px; height: 28px; background: #e5e7eb; margin: 0 4px; }
+    .color-control { display: flex; align-items: center; gap: 8px; margin-left: 2px; font-size: 14px; color: #4b5563; }
+    #colorPicker { width: 38px; height: 38px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 3px; background: #fff; cursor: pointer; }
+    #colorPicker:disabled, .clear:disabled { opacity: .45; cursor: not-allowed; }
+    .export { margin-left: auto; background: #111827; color: #fff; border-color: #111827; padding: 0 15px; }
+    .export:hover { background: #374151; }
+    .board-shell { overflow: hidden; background: #fff; border: 1px solid #d1d5db; border-top: 0; border-radius: 0 0 12px 12px; box-shadow: 0 7px 20px rgba(17,24,39,.06); }
+    #board { display: block; width: 100%; aspect-ratio: 11 / 7; background: #fff; touch-action: none; user-select: none; }
+    #regionLayer path { cursor: pointer; }
+    #shapeLayer { pointer-events: none; }
+    .shape { fill: none; stroke: #000; stroke-width: 1; vector-effect: non-scaling-stroke; }
+    #preview { fill: none; stroke: #64748b; stroke-width: 1; stroke-dasharray: 4 3; pointer-events: none; vector-effect: non-scaling-stroke; }
+    #selection { fill: none; stroke: #2563eb; stroke-width: 2; stroke-dasharray: 5 3; pointer-events: none; vector-effect: non-scaling-stroke; }
+    .help { margin: 12px 2px 0; color: #4b5563; font-size: 13px; line-height: 1.55; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+    @media (max-width: 620px) { .app { width: calc(100% - 20px); margin: 10px auto; } .toolbar { flex-wrap: wrap; border-radius: 10px 10px 0 0; } .export { margin-left: 0; } .color-control { flex: 1; } }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="toolbar" role="toolbar" aria-label="画板工具">
+      <button class="tool active" type="button" data-mode="select" aria-label="选择工具" title="选择 / 移动">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5 18.3 11l-6.2 1.8L9.7 19 5 3.5Z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/><path d="m13 14 5.2 5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <button class="tool" type="button" data-mode="square" aria-label="绘制正方形" title="绘制正方形">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+      </button>
+      <button class="tool" type="button" data-mode="circle" aria-label="绘制圆形" title="绘制圆形">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+      </button>
+      <span class="divider" aria-hidden="true"></span>
+      <label class="color-control" for="colorPicker">区域颜色 <input id="colorPicker" type="color" value="#f59e0b" disabled></label>
+      <button class="clear" id="clearColor" type="button" disabled>清除颜色</button>
+      <button class="export" id="exportSvg" type="button">导出已上色 SVG</button>
+    </div>
+    <div class="board-shell">
+      <svg id="board" viewBox="0 0 1100 700" role="application" aria-label="白色画板：拖动创建图形，选择工具可移动边框或选中区域">
+        <g id="regionLayer"></g>
+        <g id="shapeLayer"></g>
+        <g id="overlayLayer"><path id="preview" hidden></path><path id="selection" hidden></path></g>
+      </svg>
+    </div>
+    <p class="help">选择工具：拖动图形边框及其周围 5px 可移动图形；点击区域可选中并着色。正方形或圆形工具：在画板上拖动即可创建图形。</p>
+  </main>
+
+  <script>
+    (() => {
+      'use strict';
+      const SVG_NS = 'http://www.w3.org/2000/svg';
+      const WIDTH = 1100;
+      const HEIGHT = 700;
+      const EPS = 1e-7;
+      const NODE_PRECISION = 10000;
+      const board = document.getElementById('board');
+      const regionLayer = document.getElementById('regionLayer');
+      const shapeLayer = document.getElementById('shapeLayer');
+      const preview = document.getElementById('preview');
+      const selection = document.getElementById('selection');
+      const colorPicker = document.getElementById('colorPicker');
+      const clearColorButton = document.getElementById('clearColor');
+      const exportButton = document.getElementById('exportSvg');
+
+      let mode = 'select';
+      let shapes = [];
+      let regions = [];
+      let selectedRegionKey = null;
+      let pointerAction = null;
+      let nextShapeId = 1;
+
+      const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+      const point = (x, y) => ({ x, y });
+      const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const keyForPoint = (p) => `${Math.round(p.x * NODE_PRECISION)},${Math.round(p.y * NODE_PRECISION)}`;
+      const fmt = (value) => Number(value.toFixed(3)).toString();
+      const pointText = (p) => `${fmt(p.x)} ${fmt(p.y)}`;
+      const createSvg = (name) => document.createElementNS(SVG_NS, name);
+
+      function pointerPosition(event) {
+        const rect = board.getBoundingClientRect();
+        return point(
+          clamp((event.clientX - rect.left) * WIDTH / rect.width, 0, WIDTH),
+          clamp((event.clientY - rect.top) * HEIGHT / rect.height, 0, HEIGHT)
+        );
+      }
+
+      function setMode(nextMode) {
+        mode = nextMode;
+        document.querySelectorAll('.tool').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
+        board.style.cursor = mode === 'select' ? 'default' : 'crosshair';
+        clearSelection();
+      }
+
+      document.querySelectorAll('.tool').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
+
+      function shapeBounds(shape) {
+        return shape.type === 'square'
+          ? { left: shape.x, top: shape.y, right: shape.x + shape.size, bottom: shape.y + shape.size }
+          : { left: shape.cx - shape.r, top: shape.cy - shape.r, right: shape.cx + shape.r, bottom: shape.cy + shape.r };
+      }
+
+      function copyShape(shape) { return { ...shape }; }
+
+      function clampShapeToBoard(shape) {
+        if (shape.type === 'square') {
+          shape.x = clamp(shape.x, 0, WIDTH - shape.size);
+          shape.y = clamp(shape.y, 0, HEIGHT - shape.size);
+        } else {
+          shape.cx = clamp(shape.cx, shape.r, WIDTH - shape.r);
+          shape.cy = clamp(shape.cy, shape.r, HEIGHT - shape.r);
+        }
+      }
+
+      function makeShapeFromDrag(type, start, current) {
+        const dx = current.x - start.x;
+        const dy = current.y - start.y;
+        const directionX = dx >= 0 ? 1 : -1;
+        const directionY = dy >= 0 ? 1 : -1;
+        const requested = Math.min(Math.abs(dx), Math.abs(dy));
+        const maxX = directionX > 0 ? WIDTH - start.x : start.x;
+        const maxY = directionY > 0 ? HEIGHT - start.y : start.y;
+        const size = Math.min(requested, maxX, maxY);
+        if (size < 3) return null;
+        const left = directionX > 0 ? start.x : start.x - size;
+        const top = directionY > 0 ? start.y : start.y - size;
+        if (type === 'square') return { id: `shape-${nextShapeId}`, type, x: left, y: top, size };
+        return { id: `shape-${nextShapeId}`, type, cx: left + size / 2, cy: top + size / 2, r: size / 2 };
+      }
+
+      function previewDrag(start, current) {
+        const draft = makeShapeFromDrag(mode, start, current);
+        if (!draft) { preview.hidden = true; return; }
+        preview.hidden = false;
+        if (draft.type === 'square') preview.setAttribute('d', `M ${fmt(draft.x)} ${fmt(draft.y)} h ${fmt(draft.size)} v ${fmt(draft.size)} h ${fmt(-draft.size)} Z`);
+        else preview.setAttribute('d', `M ${fmt(draft.cx - draft.r)} ${fmt(draft.cy)} A ${fmt(draft.r)} ${fmt(draft.r)} 0 1 0 ${fmt(draft.cx + draft.r)} ${fmt(draft.cy)} A ${fmt(draft.r)} ${fmt(draft.r)} 0 1 0 ${fmt(draft.cx - draft.r)} ${fmt(draft.cy)}`);
+      }
+
+      function distanceToSegment(p, a, b) {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const lengthSquared = dx * dx + dy * dy;
+        if (lengthSquared < EPS) return distance(p, a);
+        const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared, 0, 1);
+        return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+      }
+
+      function distanceToShapeBorder(p, shape) {
+        if (shape.type === 'circle') return Math.abs(distance(p, point(shape.cx, shape.cy)) - shape.r);
+        const a = point(shape.x, shape.y);
+        const b = point(shape.x + shape.size, shape.y);
+        const c = point(shape.x + shape.size, shape.y + shape.size);
+        const d = point(shape.x, shape.y + shape.size);
+        return Math.min(distanceToSegment(p, a, b), distanceToSegment(p, b, c), distanceToSegment(p, c, d), distanceToSegment(p, d, a));
+      }
+
+      function closestBorderShape(p) {
+        const renderedWidth = board.getBoundingClientRect().width || WIDTH;
+        const tolerance = 5 * WIDTH / renderedWidth;
+        let result = null;
+        shapes.forEach((shape, index) => {
+          const d = distanceToShapeBorder(p, shape);
+          if (d <= tolerance && (!result || d < result.distance || (Math.abs(d - result.distance) < EPS && index > result.index))) result = { shape, index, distance: d };
+        });
+        return result;
+      }
+
+      function sameBoundary(first, second) {
+        if (first.type !== second.type) return false;
+        if (first.type === 'square') return Math.abs(first.x - second.x) < EPS && Math.abs(first.y - second.y) < EPS && Math.abs(first.size - second.size) < EPS;
+        return Math.abs(first.cx - second.cx) < EPS && Math.abs(first.cy - second.cy) < EPS && Math.abs(first.r - second.r) < EPS;
+      }
+
+      function primitivesForShapes() {
+        const primitives = [];
+        const uniqueShapes = shapes.filter((shape, index) => !shapes.slice(0, index).some((other) => sameBoundary(shape, other)));
+        uniqueShapes.forEach((shape) => {
+          if (shape.type === 'square') {
+            const corners = [
+              point(shape.x, shape.y), point(shape.x + shape.size, shape.y),
+              point(shape.x + shape.size, shape.y + shape.size), point(shape.x, shape.y + shape.size)
+            ];
+            for (let i = 0; i < 4; i += 1) primitives.push({ id: `${shape.id}-edge-${i}`, shapeId: shape.id, type: 'line', a: corners[i], b: corners[(i + 1) % 4], params: [0, 1] });
+          } else {
+            // A per-shape split avoids turning a point-only tangency into a shared graph vertex.
+            const sequence = Number(shape.id.replace('shape-', '')) || 1;
+            const start = ((sequence * 0.61803398875) % 1) * Math.PI * 2;
+            primitives.push({ id: `${shape.id}-circle`, shapeId: shape.id, type: 'circle', c: point(shape.cx, shape.cy), r: shape.r, rangeStart: start, rangeEnd: start + Math.PI * 2, params: [start, start + Math.PI, start + Math.PI * 2] });
+          }
+        });
+        return primitives;
+      }
+
+      function lineLineIntersections(first, second) {
+        const r = point(first.b.x - first.a.x, first.b.y - first.a.y);
+        const s = point(second.b.x - second.a.x, second.b.y - second.a.y);
+        const cross = r.x * s.y - r.y * s.x;
+        if (Math.abs(cross) < EPS) return [];
+        const qp = point(second.a.x - first.a.x, second.a.y - first.a.y);
+        const t = (qp.x * s.y - qp.y * s.x) / cross;
+        const u = (qp.x * r.y - qp.y * r.x) / cross;
+        if (t < -EPS || t > 1 + EPS || u < -EPS || u > 1 + EPS) return [];
+        return [point(first.a.x + clamp(t, 0, 1) * r.x, first.a.y + clamp(t, 0, 1) * r.y)];
+      }
+
+      function pointOnSegment(p, line) {
+        const dx = line.b.x - line.a.x;
+        const dy = line.b.y - line.a.y;
+        const cross = (p.x - line.a.x) * dy - (p.y - line.a.y) * dx;
+        if (Math.abs(cross) > EPS) return false;
+        return p.x >= Math.min(line.a.x, line.b.x) - EPS && p.x <= Math.max(line.a.x, line.b.x) + EPS && p.y >= Math.min(line.a.y, line.b.y) - EPS && p.y <= Math.max(line.a.y, line.b.y) + EPS;
+      }
+
+      function splitCollinearOverlap(first, second) {
+        const firstDx = first.b.x - first.a.x;
+        const firstDy = first.b.y - first.a.y;
+        const cross = firstDx * (second.b.y - second.a.y) - firstDy * (second.b.x - second.a.x);
+        const aligned = (second.a.x - first.a.x) * firstDy - (second.a.y - first.a.y) * firstDx;
+        if (Math.abs(cross) > EPS || Math.abs(aligned) > EPS) return;
+        [first.a, first.b].forEach((p) => { if (pointOnSegment(p, second)) addParam(second, p); });
+        [second.a, second.b].forEach((p) => { if (pointOnSegment(p, first)) addParam(first, p); });
+      }
+
+      function lineCircleIntersections(line, circle) {
+        const dx = line.b.x - line.a.x;
+        const dy = line.b.y - line.a.y;
+        const fx = line.a.x - circle.c.x;
+        const fy = line.a.y - circle.c.y;
+        const a = dx * dx + dy * dy;
+        const b = 2 * (fx * dx + fy * dy);
+        const c = fx * fx + fy * fy - circle.r * circle.r;
+        const discriminant = b * b - 4 * a * c;
+        if (discriminant < -EPS) return [];
+        const root = Math.sqrt(Math.max(0, discriminant));
+        const candidates = [(-b - root) / (2 * a), (-b + root) / (2 * a)];
+        const result = [];
+        candidates.forEach((t) => {
+          if (t >= -EPS && t <= 1 + EPS) {
+            const p = point(line.a.x + clamp(t, 0, 1) * dx, line.a.y + clamp(t, 0, 1) * dy);
+            if (!result.some((other) => distance(p, other) < 1e-5)) result.push(p);
+          }
+        });
+        return result;
+      }
+
+      function circleCircleIntersections(first, second) {
+        const d = distance(first.c, second.c);
+        if (d < EPS || d > first.r + second.r + EPS || d < Math.abs(first.r - second.r) - EPS) return [];
+        const a = (first.r * first.r - second.r * second.r + d * d) / (2 * d);
+        const hSquared = first.r * first.r - a * a;
+        // Point-only contacts do not create a new bounded face, so keep the two outlines independent.
+        if (hSquared <= 1e-4) return [];
+        const h = Math.sqrt(hSquared);
+        const mid = point(first.c.x + a * (second.c.x - first.c.x) / d, first.c.y + a * (second.c.y - first.c.y) / d);
+        const rx = -(second.c.y - first.c.y) * h / d;
+        const ry = (second.c.x - first.c.x) * h / d;
+        const result = [point(mid.x + rx, mid.y + ry)];
+        if (h > EPS) result.push(point(mid.x - rx, mid.y - ry));
+        return result;
+      }
+
+      function parameterAt(primitive, p) {
+        if (primitive.type === 'line') {
+          const dx = primitive.b.x - primitive.a.x;
+          const dy = primitive.b.y - primitive.a.y;
+          const denominator = dx * dx + dy * dy;
+          return clamp(((p.x - primitive.a.x) * dx + (p.y - primitive.a.y) * dy) / denominator, 0, 1);
+        }
+        let theta = Math.atan2(p.y - primitive.c.y, p.x - primitive.c.x);
+        if (theta < 0) theta += Math.PI * 2;
+        while (theta < primitive.rangeStart - EPS) theta += Math.PI * 2;
+        return theta;
+      }
+
+      function addParam(primitive, p) {
+        const param = parameterAt(primitive, p);
+        if (!primitive.params.some((existing) => Math.abs(existing - param) < 1e-6 || (primitive.type === 'circle' && Math.abs(Math.abs(existing - param) - Math.PI * 2) < 1e-6))) primitive.params.push(param);
+      }
+
+      function pointAt(primitive, parameter) {
+        if (primitive.type === 'line') return point(primitive.a.x + (primitive.b.x - primitive.a.x) * parameter, primitive.a.y + (primitive.b.y - primitive.a.y) * parameter);
+        return point(primitive.c.x + primitive.r * Math.cos(parameter), primitive.c.y + primitive.r * Math.sin(parameter));
+      }
+
+      function tangentAngle(primitive, parameter, direction) {
+        let dx;
+        let dy;
+        if (primitive.type === 'line') { dx = primitive.b.x - primitive.a.x; dy = primitive.b.y - primitive.a.y; }
+        else { dx = -primitive.r * Math.sin(parameter); dy = primitive.r * Math.cos(parameter); }
+        return Math.atan2(-dy * direction, dx * direction);
+      }
+
+      function buildHalfEdges() {
+        const primitives = primitivesForShapes();
+        for (let i = 0; i < primitives.length; i += 1) {
+          for (let j = i + 1; j < primitives.length; j += 1) {
+            const first = primitives[i];
+            const second = primitives[j];
+            if (first.shapeId === second.shapeId) continue;
+            let intersections;
+            if (first.type === 'line' && second.type === 'line') {
+              splitCollinearOverlap(first, second);
+              intersections = lineLineIntersections(first, second);
+            }
+            else if (first.type === 'line' && second.type === 'circle') intersections = lineCircleIntersections(first, second);
+            else if (first.type === 'circle' && second.type === 'line') intersections = lineCircleIntersections(second, first);
+            else intersections = circleCircleIntersections(first, second);
+            intersections.forEach((intersection) => { addParam(first, intersection); addParam(second, intersection); });
+          }
+        }
+
+        const nodes = new Map();
+        const getNode = (p) => {
+          const key = keyForPoint(p);
+          if (!nodes.has(key)) nodes.set(key, { key, p });
+          return nodes.get(key);
+        };
+        const edges = [];
+        const outgoing = new Map();
+        const seenBoundaryPieces = new Set();
+        const register = (edge) => {
+          edges.push(edge);
+          if (!outgoing.has(edge.from.key)) outgoing.set(edge.from.key, []);
+          outgoing.get(edge.from.key).push(edge);
+        };
+        const boundaryPieceKey = (primitive, from, to, start, end) => {
+          const endpoints = [from.key, to.key].sort().join(':');
+          if (primitive.type === 'line') return `line:${endpoints}`;
+          const mid = pointAt(primitive, (start + end) / 2);
+          return `arc:${fmt(primitive.c.x)},${fmt(primitive.c.y)},${fmt(primitive.r)}:${endpoints}:${keyForPoint(mid)}`;
+        };
+        primitives.forEach((primitive) => {
+          const maximum = primitive.type === 'line' ? 1 : primitive.rangeEnd;
+          const parameters = primitive.params
+            .map((value) => primitive.type === 'circle' && Math.abs(value - maximum) < 1e-6 ? maximum : value)
+            .sort((a, b) => a - b)
+            .filter((value, index, values) => index === 0 || Math.abs(value - values[index - 1]) > 1e-6);
+          for (let i = 0; i < parameters.length - 1; i += 1) {
+            const start = parameters[i];
+            const end = parameters[i + 1];
+            if (end - start < EPS) continue;
+            const from = getNode(pointAt(primitive, start));
+            const to = getNode(pointAt(primitive, end));
+            const pieceKey = boundaryPieceKey(primitive, from, to, start, end);
+            if (seenBoundaryPieces.has(pieceKey)) continue;
+            seenBoundaryPieces.add(pieceKey);
+            const forward = { primitive, from, to, start, end, direction: 1, startAngle: tangentAngle(primitive, start, 1), twin: null, next: null };
+            const reverse = { primitive, from: to, to: from, start: end, end: start, direction: -1, startAngle: tangentAngle(primitive, end, -1), twin: forward, next: null };
+            forward.twin = reverse;
+            register(forward);
+            register(reverse);
+          }
+        });
+        outgoing.forEach((list) => list.sort((a, b) => a.startAngle - b.startAngle));
+        edges.forEach((edge) => {
+          const atEnd = outgoing.get(edge.to.key);
+          const reverseIndex = atEnd.indexOf(edge.twin);
+          edge.next = atEnd[(reverseIndex - 1 + atEnd.length) % atEnd.length];
+        });
+        return edges;
+      }
+
+      function edgeSamples(edge) {
+        const values = [];
+        if (edge.primitive.type === 'line') return [edge.from.p, edge.to.p];
+        const delta = edge.end - edge.start;
+        const count = Math.max(1, Math.ceil(Math.abs(delta) / (Math.PI / 24)));
+        for (let i = 0; i <= count; i += 1) values.push(pointAt(edge.primitive, edge.start + delta * i / count));
+        return values;
+      }
+
+      function signedMathArea(edges) {
+        const samples = [];
+        edges.forEach((edge) => {
+          edgeSamples(edge).forEach((p, index) => { if (samples.length === 0 || index > 0) samples.push(p); });
+        });
+        let area = 0;
+        for (let i = 0; i < samples.length - 1; i += 1) area += samples[i].x * (-samples[i + 1].y) - samples[i + 1].x * (-samples[i].y);
+        return area / 2;
+      }
+
+      function edgePath(edge) {
+        if (edge.primitive.type === 'line') return `L ${pointText(edge.to.p)}`;
+        const radius = fmt(edge.primitive.r);
+        const delta = edge.end - edge.start;
+        const large = Math.abs(delta) > Math.PI + EPS ? 1 : 0;
+        return `A ${radius} ${radius} 0 ${large} ${delta > 0 ? 1 : 0} ${pointText(edge.to.p)}`;
+      }
+
+      function pathForCycle(cycle) {
+        return `M ${pointText(cycle.edges[0].from.p)} ${cycle.edges.map(edgePath).join(' ')} Z`;
+      }
+
+      function leftProbe(edge) {
+        let p;
+        let dx;
+        let dy;
+        if (edge.primitive.type === 'line') {
+          p = point((edge.from.p.x + edge.to.p.x) / 2, (edge.from.p.y + edge.to.p.y) / 2);
+          dx = (edge.to.p.x - edge.from.p.x);
+          dy = (edge.to.p.y - edge.from.p.y);
+        } else {
+          const theta = (edge.start + edge.end) / 2;
+          p = pointAt(edge.primitive, theta);
+          dx = -edge.primitive.r * Math.sin(theta) * edge.direction;
+          dy = edge.primitive.r * Math.cos(theta) * edge.direction;
+        }
+        const length = Math.hypot(dx, dy) || 1;
+        return point(p.x + dy / length * 0.75, p.y - dx / length * 0.75);
+      }
+
+      function containsPoint(shape, p) {
+        if (shape.type === 'square') return p.x > shape.x + EPS && p.x < shape.x + shape.size - EPS && p.y > shape.y + EPS && p.y < shape.y + shape.size - EPS;
+        return (p.x - shape.cx) ** 2 + (p.y - shape.cy) ** 2 < (shape.r - EPS) ** 2;
+      }
+
+      function signatureFor(p) { return shapes.map((shape) => containsPoint(shape, p) ? '1' : '0').join(''); }
+
+      function cyclePolygon(cycle) {
+        const result = [];
+        cycle.edges.forEach((edge) => edgeSamples(edge).forEach((p, index) => { if (!result.length || index > 0) result.push(p); }));
+        return result;
+      }
+
+      function pointInPolygon(p, polygon) {
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+          const a = polygon[i];
+          const b = polygon[j];
+          if ((a.y > p.y) !== (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+        }
+        return inside;
+      }
+
+      function pathKey(cycle) {
+        return cycle.edges.map((edge) => {
+          if (edge.primitive.type === 'line') return `L:${fmt(edge.from.p.x)},${fmt(edge.from.p.y)}>${fmt(edge.to.p.x)},${fmt(edge.to.p.y)}`;
+          return `C:${fmt(edge.primitive.c.x)},${fmt(edge.primitive.c.y)},${fmt(edge.primitive.r)}:${fmt(edge.start)}>${fmt(edge.end)}`;
+        }).join('|');
+      }
+
+      function calculateRegions() {
+        const oldColors = new Map(regions.filter((region) => region.color).map((region) => [region.key, region.color]));
+        const edges = buildHalfEdges();
+        const visited = new Set();
+        const cycles = [];
+        edges.forEach((edge) => {
+          if (visited.has(edge)) return;
+          const cycleEdges = [];
+          let current = edge;
+          while (!visited.has(current)) {
+            visited.add(current);
+            cycleEdges.push(current);
+            current = current.next;
+          }
+          if (current !== edge || !cycleEdges.length) return;
+          const area = signedMathArea(cycleEdges);
+          if (Math.abs(area) < 0.001) return;
+          const cycle = { edges: cycleEdges, area, path: '', signature: '', probe: null, polygon: null, key: '' };
+          cycle.path = pathForCycle(cycle);
+          cycle.probe = leftProbe(cycleEdges[0]);
+          cycle.signature = signatureFor(cycle.probe);
+          cycle.polygon = cyclePolygon(cycle);
+          cycle.key = pathKey(cycle);
+          cycles.push(cycle);
+        });
+        const positive = cycles.filter((cycle) => cycle.area > 0);
+        const negative = cycles.filter((cycle) => cycle.area < 0);
+        const generated = positive.map((outer) => ({ outer, holes: [], signature: outer.signature }));
+        negative.forEach((hole) => {
+          const candidates = generated
+            .filter((region) => region.signature === hole.signature && pointInPolygon(hole.probe, region.outer.polygon))
+            .sort((a, b) => Math.abs(a.outer.area) - Math.abs(b.outer.area));
+          if (candidates.length) candidates[0].holes.push(hole);
+        });
+        regions = generated.map((region) => {
+          const orderedHoleKeys = region.holes.map((hole) => hole.key).sort();
+          const key = `${region.outer.key}::${orderedHoleKeys.join('::')}`;
+          return { key, d: [region.outer.path, ...region.holes.map((hole) => hole.path)].join(' '), color: oldColors.get(key) || null };
+        });
+        if (!regions.some((region) => region.key === selectedRegionKey)) selectedRegionKey = null;
+        render();
+      }
+
+      function renderShapes() {
+        shapeLayer.replaceChildren();
+        shapes.forEach((shape) => {
+          const element = createSvg(shape.type === 'square' ? 'rect' : 'circle');
+          element.classList.add('shape');
+          if (shape.type === 'square') { element.setAttribute('x', shape.x); element.setAttribute('y', shape.y); element.setAttribute('width', shape.size); element.setAttribute('height', shape.size); }
+          else { element.setAttribute('cx', shape.cx); element.setAttribute('cy', shape.cy); element.setAttribute('r', shape.r); }
+          shapeLayer.append(element);
+        });
+      }
+
+      function renderRegions() {
+        regionLayer.replaceChildren();
+        regions.forEach((region) => {
+          const element = createSvg('path');
+          element.setAttribute('d', region.d);
+          element.setAttribute('fill-rule', 'evenodd');
+          element.setAttribute('data-region-key', region.key);
+          element.setAttribute('fill', region.color || 'transparent');
+          element.style.pointerEvents = 'all';
+          regionLayer.append(element);
+        });
+      }
+
+      function updateSelectionUI() {
+        const selected = regions.find((region) => region.key === selectedRegionKey);
+        if (selected) {
+          selection.hidden = false;
+          selection.setAttribute('d', selected.d);
+          selection.setAttribute('fill-rule', 'evenodd');
+          colorPicker.disabled = false;
+          clearColorButton.disabled = false;
+          if (selected.color) colorPicker.value = selected.color;
+        } else {
+          selection.hidden = true;
+          colorPicker.disabled = true;
+          clearColorButton.disabled = true;
+        }
+      }
+
+      function render() { renderRegions(); renderShapes(); updateSelectionUI(); }
+
+      function clearSelection() { selectedRegionKey = null; updateSelectionUI(); }
+
+      function selectRegion(key) { selectedRegionKey = key; updateSelectionUI(); }
+
+      function changeSelectedColor(color) {
+        const selected = regions.find((region) => region.key === selectedRegionKey);
+        if (!selected) return;
+        selected.color = color;
+        render();
+      }
+
+      colorPicker.addEventListener('input', () => changeSelectedColor(colorPicker.value));
+      clearColorButton.addEventListener('click', () => changeSelectedColor(null));
+
+      board.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        const p = pointerPosition(event);
+        board.setPointerCapture(event.pointerId);
+        if (mode !== 'select') {
+          pointerAction = { kind: 'create', start: p, pointerId: event.pointerId };
+          previewDrag(p, p);
+          event.preventDefault();
+          return;
+        }
+        const hit = closestBorderShape(p);
+        if (hit) {
+          pointerAction = { kind: 'move', pointerId: event.pointerId, shapeId: hit.shape.id, initialShape: copyShape(hit.shape), start: p };
+          clearSelection();
+          event.preventDefault();
+          return;
+        }
+        const regionTarget = event.target.closest ? event.target.closest('[data-region-key]') : null;
+        if (regionTarget) selectRegion(regionTarget.dataset.regionKey);
+        else clearSelection();
+      });
+
+      board.addEventListener('pointermove', (event) => {
+        if (!pointerAction || pointerAction.pointerId !== event.pointerId) return;
+        const p = pointerPosition(event);
+        if (pointerAction.kind === 'create') previewDrag(pointerAction.start, p);
+        else {
+          const shape = shapes.find((item) => item.id === pointerAction.shapeId);
+          if (!shape) return;
+          const dx = p.x - pointerAction.start.x;
+          const dy = p.y - pointerAction.start.y;
+          Object.assign(shape, pointerAction.initialShape);
+          if (shape.type === 'square') { shape.x += dx; shape.y += dy; }
+          else { shape.cx += dx; shape.cy += dy; }
+          clampShapeToBoard(shape);
+          renderShapes();
+        }
+      });
+
+      function finishPointerAction(event) {
+        if (!pointerAction || pointerAction.pointerId !== event.pointerId) return;
+        const p = pointerPosition(event);
+        if (pointerAction.kind === 'create') {
+          const draft = makeShapeFromDrag(mode, pointerAction.start, p);
+          preview.hidden = true;
+          if (draft) { shapes.push(draft); nextShapeId += 1; calculateRegions(); }
+        } else if (pointerAction.kind === 'move') calculateRegions();
+        pointerAction = null;
+        if (board.hasPointerCapture(event.pointerId)) board.releasePointerCapture(event.pointerId);
+      }
+      board.addEventListener('pointerup', finishPointerAction);
+      board.addEventListener('pointercancel', finishPointerAction);
+
+      exportButton.addEventListener('click', () => {
+        const colored = regions.filter((region) => region.color);
+        const svg = [
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}">`,
+          ...colored.map((region) => `<path d="${region.d}" fill="${region.color}" fill-rule="evenodd"/>`),
+          '</svg>'
+        ].join('\n');
+        const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'cross-draw-colored-regions.svg';
+        link.click();
+        URL.revokeObjectURL(url);
+      });
+
+      calculateRegions();
+    })();
+  </script>
+</body>
+</html>

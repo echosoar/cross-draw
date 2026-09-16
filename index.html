@@ -10,15 +10,17 @@
     body { margin: 0; min-width: 320px; background: #f3f4f6; color: #111827; }
     .app { width: min(1240px, calc(100% - 32px)); margin: 24px auto; }
     .toolbar { display: flex; align-items: center; gap: 8px; min-height: 60px; padding: 10px 12px; background: #fff; border: 1px solid #d1d5db; border-radius: 12px 12px 0 0; box-shadow: 0 5px 18px rgba(17,24,39,.06); }
-    .tool, .clear, .export { appearance: none; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1f2937; height: 38px; padding: 0 12px; cursor: pointer; font: inherit; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+    .tool, .clear, .delete, .export { appearance: none; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1f2937; height: 38px; padding: 0 12px; cursor: pointer; font: inherit; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
     .tool { width: 44px; padding: 0; }
-    .tool:hover, .clear:hover, .export:hover { background: #f8fafc; }
+    .tool:hover, .clear:hover, .delete:hover, .export:hover { background: #f8fafc; }
     .tool.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; box-shadow: inset 0 0 0 1px #2563eb; }
     .tool svg { width: 21px; height: 21px; overflow: visible; }
     .divider { width: 1px; height: 28px; background: #e5e7eb; margin: 0 4px; }
     .color-control { display: flex; align-items: center; gap: 8px; margin-left: 2px; font-size: 14px; color: #4b5563; }
     #colorPicker { width: 38px; height: 38px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 3px; background: #fff; cursor: pointer; }
-    #colorPicker:disabled, .clear:disabled { opacity: .45; cursor: not-allowed; }
+    #colorValue { min-width: 72px; color: #374151; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; }
+    #colorPicker:disabled, .clear:disabled, .delete:disabled { opacity: .45; cursor: not-allowed; }
+    .shape.selected-shape { stroke: #2563eb; stroke-width: 2; stroke-dasharray: 5 3; }
     .export { margin-left: auto; background: #111827; color: #fff; border-color: #111827; padding: 0 15px; }
     .export:hover { background: #374151; }
     .board-shell { overflow: hidden; background: #fff; border: 1px solid #d1d5db; border-top: 0; border-radius: 0 0 12px 12px; box-shadow: 0 7px 20px rgba(17,24,39,.06); }
@@ -28,6 +30,8 @@
     .shape { fill: none; stroke: #000; stroke-width: 1; vector-effect: non-scaling-stroke; }
     #preview { fill: none; stroke: #64748b; stroke-width: 1; stroke-dasharray: 4 3; pointer-events: none; vector-effect: non-scaling-stroke; }
     #selection { fill: none; stroke: #2563eb; stroke-width: 2; stroke-dasharray: 5 3; pointer-events: none; vector-effect: non-scaling-stroke; }
+    /* SVG 的 hidden 属性在部分渲染环境不会移除已绘制的 path；用 display 强制同步。 */
+    #preview[hidden], #selection[hidden] { display: none !important; }
     .help { margin: 12px 2px 0; color: #4b5563; font-size: 13px; line-height: 1.55; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
     @media (max-width: 620px) { .app { width: calc(100% - 20px); margin: 10px auto; } .toolbar { flex-wrap: wrap; border-radius: 10px 10px 0 0; } .export { margin-left: 0; } .color-control { flex: 1; } }
@@ -46,8 +50,9 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
       </button>
       <span class="divider" aria-hidden="true"></span>
-      <label class="color-control" for="colorPicker">区域颜色 <input id="colorPicker" type="color" value="#f59e0b" disabled></label>
-      <button class="clear" id="clearColor" type="button" disabled>清除颜色</button>
+      <label class="color-control" for="colorPicker">颜色 <input id="colorPicker" type="color" value="#f59e0b" disabled><output id="colorValue" aria-live="polite">透明</output></label>
+      <button class="delete" id="deleteShape" type="button" disabled>删除图形</button>
+      <button class="clear" id="clearColor" type="button" disabled>透明</button>
       <button class="export" id="exportSvg" type="button">导出已上色 SVG</button>
     </div>
     <div class="board-shell">
@@ -57,7 +62,7 @@
         <g id="overlayLayer"><path id="preview" hidden></path><path id="selection" hidden></path></g>
       </svg>
     </div>
-    <p class="help">选择工具：拖动图形边框及其周围 5px 可移动图形；点击区域可选中并着色。正方形或圆形工具：在画板上拖动即可创建图形。</p>
+    <p class="help">选择工具：点击图形边框可选中，拖动边框或其周围 5px 可移动图形；选中图形后可用“删除图形”、Backspace 或 Delete 删除。点击区域可选中并着色。正方形或圆形工具：在画板上拖动即可创建图形。</p>
   </main>
 
   <script>
@@ -74,13 +79,16 @@
       const preview = document.getElementById('preview');
       const selection = document.getElementById('selection');
       const colorPicker = document.getElementById('colorPicker');
+      const colorValue = document.getElementById('colorValue');
       const clearColorButton = document.getElementById('clearColor');
+      const deleteShapeButton = document.getElementById('deleteShape');
       const exportButton = document.getElementById('exportSvg');
 
       let mode = 'select';
       let shapes = [];
       let regions = [];
       let selectedRegionKey = null;
+      let selectedShapeId = null;
       let pointerAction = null;
       let hideColoredRegions = false;
       let nextShapeId = 1;
@@ -101,11 +109,28 @@
         );
       }
 
+      function setOverlayVisibility(element, visible) {
+        element.toggleAttribute('hidden', !visible);
+        element.style.display = visible ? '' : 'none';
+      }
+
+      function hidePreview() { setOverlayVisibility(preview, false); }
+      function showPreview() { setOverlayVisibility(preview, true); }
+      function hideSelection() { setOverlayVisibility(selection, false); }
+      function showSelection() { setOverlayVisibility(selection, true); }
+
+      function updateBoardCursor() {
+        if (pointerAction && pointerAction.kind === 'move') board.style.cursor = 'grabbing';
+        else board.style.cursor = mode === 'select' ? 'default' : 'crosshair';
+      }
+
       function setMode(nextMode) {
         mode = nextMode;
         document.querySelectorAll('.tool').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
-        board.style.cursor = mode === 'select' ? 'default' : 'crosshair';
+        hidePreview();
         clearSelection();
+        clearShapeSelection();
+        updateBoardCursor();
       }
 
       document.querySelectorAll('.tool').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
@@ -146,8 +171,8 @@
 
       function previewDrag(start, current) {
         const draft = makeShapeFromDrag(mode, start, current);
-        if (!draft) { preview.hidden = true; return; }
-        preview.hidden = false;
+        if (!draft) { hidePreview(); return; }
+        showPreview();
         if (draft.type === 'square') preview.setAttribute('d', `M ${fmt(draft.x)} ${fmt(draft.y)} h ${fmt(draft.size)} v ${fmt(draft.size)} h ${fmt(-draft.size)} Z`);
         else preview.setAttribute('d', `M ${fmt(draft.cx - draft.r)} ${fmt(draft.cy)} A ${fmt(draft.r)} ${fmt(draft.r)} 0 1 0 ${fmt(draft.cx + draft.r)} ${fmt(draft.cy)} A ${fmt(draft.r)} ${fmt(draft.r)} 0 1 0 ${fmt(draft.cx - draft.r)} ${fmt(draft.cy)}`);
       }
@@ -173,12 +198,12 @@
       function closestBorderShape(p) {
         const renderedWidth = board.getBoundingClientRect().width || WIDTH;
         const tolerance = 5 * WIDTH / renderedWidth;
-        let result = null;
-        shapes.forEach((shape, index) => {
+        for (let index = shapes.length - 1; index >= 0; index -= 1) {
+          const shape = shapes[index];
           const d = distanceToShapeBorder(p, shape);
-          if (d <= tolerance && (!result || d < result.distance || (Math.abs(d - result.distance) < EPS && index > result.index))) result = { shape, index, distance: d };
-        });
-        return result;
+          if (d <= tolerance) return { shape, index, distance: d };
+        }
+        return null;
       }
 
       function sameBoundary(first, second) {
@@ -499,14 +524,17 @@
       }
 
       function renderShapes() {
+        if (!shapes.some((shape) => shape.id === selectedShapeId)) selectedShapeId = null;
         shapeLayer.replaceChildren();
         shapes.forEach((shape) => {
           const element = createSvg(shape.type === 'square' ? 'rect' : 'circle');
           element.classList.add('shape');
+          if (shape.id === selectedShapeId) element.classList.add('selected-shape');
           if (shape.type === 'square') { element.setAttribute('x', shape.x); element.setAttribute('y', shape.y); element.setAttribute('width', shape.size); element.setAttribute('height', shape.size); }
           else { element.setAttribute('cx', shape.cx); element.setAttribute('cy', shape.cy); element.setAttribute('r', shape.r); }
           shapeLayer.append(element);
         });
+        deleteShapeButton.disabled = selectedShapeId === null;
       }
 
       function renderRegions() {
@@ -526,15 +554,16 @@
 
       function updateSelectionUI() {
         const selected = regions.find((region) => region.key === selectedRegionKey);
+        colorValue.textContent = selected && selected.color ? selected.color.toUpperCase() : '透明';
         if (selected) {
-          selection.hidden = false;
+          showSelection();
           selection.setAttribute('d', selected.d);
           selection.setAttribute('fill-rule', 'evenodd');
           colorPicker.disabled = false;
           clearColorButton.disabled = false;
           if (selected.color) colorPicker.value = selected.color;
         } else {
-          selection.hidden = true;
+          hideSelection();
           colorPicker.disabled = true;
           clearColorButton.disabled = true;
         }
@@ -546,6 +575,26 @@
 
       function selectRegion(key) { selectedRegionKey = key; updateSelectionUI(); }
 
+      function selectShape(shapeId) {
+        selectedShapeId = shapeId;
+        renderShapes();
+      }
+
+      function clearShapeSelection() {
+        if (selectedShapeId === null) return;
+        selectedShapeId = null;
+        renderShapes();
+      }
+
+      function deleteSelectedShape() {
+        const index = shapes.findIndex((shape) => shape.id === selectedShapeId);
+        if (index < 0) { clearShapeSelection(); return; }
+        shapes.splice(index, 1);
+        selectedShapeId = null;
+        clearSelection();
+        calculateRegions();
+      }
+
       function changeSelectedColor(color) {
         const selected = regions.find((region) => region.key === selectedRegionKey);
         if (!selected) return;
@@ -553,14 +602,27 @@
         render();
       }
 
+      colorPicker.addEventListener('pointerdown', () => {
+        const selected = regions.find((region) => region.key === selectedRegionKey);
+        if (selected && !selected.color) changeSelectedColor(colorPicker.value);
+      });
       colorPicker.addEventListener('input', () => changeSelectedColor(colorPicker.value));
       clearColorButton.addEventListener('click', () => changeSelectedColor(null));
+      deleteShapeButton.addEventListener('click', deleteSelectedShape);
+      document.addEventListener('keydown', (event) => {
+        if ((event.key === 'Backspace' || event.key === 'Delete') && selectedShapeId !== null) {
+          event.preventDefault();
+          deleteSelectedShape();
+        }
+      });
 
       board.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) return;
         const p = pointerPosition(event);
         board.setPointerCapture(event.pointerId);
         if (mode !== 'select') {
+          clearShapeSelection();
+          hidePreview();
           pointerAction = { kind: 'create', start: p, pointerId: event.pointerId };
           previewDrag(p, p);
           event.preventDefault();
@@ -568,20 +630,27 @@
         }
         const hit = closestBorderShape(p);
         if (hit) {
+          hidePreview();
+          selectShape(hit.shape.id);
           pointerAction = { kind: 'move', pointerId: event.pointerId, shapeId: hit.shape.id, initialShape: copyShape(hit.shape), start: p };
           clearSelection();
           hideColoredRegions = true;
           renderRegions();
+          updateBoardCursor();
           event.preventDefault();
           return;
         }
+        clearShapeSelection();
         const regionTarget = event.target.closest ? event.target.closest('[data-region-key]') : null;
         if (regionTarget) selectRegion(regionTarget.dataset.regionKey);
         else clearSelection();
       });
 
       board.addEventListener('pointermove', (event) => {
-        if (!pointerAction || pointerAction.pointerId !== event.pointerId) return;
+        if (!pointerAction || pointerAction.pointerId !== event.pointerId) {
+          if (mode === 'select') board.style.cursor = closestBorderShape(pointerPosition(event)) ? 'grab' : 'default';
+          return;
+        }
         const p = pointerPosition(event);
         if (pointerAction.kind === 'create') previewDrag(pointerAction.start, p);
         else {
@@ -600,15 +669,16 @@
       function finishPointerAction(event) {
         if (!pointerAction || pointerAction.pointerId !== event.pointerId) return;
         const p = pointerPosition(event);
+        hidePreview();
         if (pointerAction.kind === 'create') {
           const draft = makeShapeFromDrag(mode, pointerAction.start, p);
-          preview.hidden = true;
           if (draft) { shapes.push(draft); nextShapeId += 1; calculateRegions(); }
         } else if (pointerAction.kind === 'move') {
           hideColoredRegions = false;
           calculateRegions();
         }
         pointerAction = null;
+        updateBoardCursor();
         if (board.hasPointerCapture(event.pointerId)) board.releasePointerCapture(event.pointerId);
       }
       board.addEventListener('pointerup', finishPointerAction);

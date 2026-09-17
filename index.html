@@ -48,8 +48,8 @@
     .property-row input:focus { border-bottom-color: #000; }
     .property-divider { height: 1px; margin: 6px 0 1px; background: rgba(0, 0, 0, .14); }
     .aspect-toggle { width: 100%; min-height: 34px; border: 1px solid rgba(0, 0, 0, .42); padding: 0 9px; background: transparent; color: #000; cursor: pointer; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-align: left; }
-    .remove-shape { width: 100%; min-height: 34px; margin-top: 8px; border: 0; padding: 0; background: transparent; color: rgba(0, 0, 0, .58); cursor: pointer; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-align: left; }
-    .remove-shape:disabled { opacity: .24; cursor: not-allowed; }
+    .copy-shape, .remove-shape { width: 100%; min-height: 34px; margin-top: 8px; border: 0; padding: 0; background: transparent; color: rgba(0, 0, 0, .58); cursor: pointer; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-align: left; }
+    .copy-shape:disabled, .remove-shape:disabled { opacity: .24; cursor: not-allowed; }
     .aspect-toggle[aria-pressed="true"]::before { content: "锁定比例"; }
     .aspect-toggle[aria-pressed="false"]::before { content: "解锁比例"; }
     .aspect-toggle span { color: rgba(0, 0, 0, .45); font-weight: 500; }
@@ -104,7 +104,7 @@
     <div class="drawing-layout">
       <div class="canvas-column">
         <div class="board-shell">
-          <svg id="board" viewBox="0 0 1100 700" role="application" aria-label="白色画板：拖动创建图形，选择工具可移动边框或选中区域">
+          <svg id="board" viewBox="0 0 1100 700" role="application" tabindex="0" aria-label="白色画板：拖动创建图形，选择工具可移动边框或选中区域">
             <g id="regionLayer"></g>
             <g id="shapeLayer"></g>
             <g id="overlayLayer"><path id="preview" hidden></path><path id="selection" hidden></path><circle id="lineStartHandle" class="line-handle" data-line-handle="a" r="5" hidden></circle><circle id="lineEndHandle" class="line-handle" data-line-handle="b" r="5" hidden></circle><circle id="shapeResizeHandle" class="line-handle shape-resize-handle" data-shape-resize r="5" hidden></circle></g>
@@ -113,7 +113,7 @@
         <p class="help">选择工具：点击图形边框可选中，拖动边框或其周围 5px 可移动图形。方形、圆形或直线工具：在画板上拖动即可创建图形。</p>
         <p class="help">Created by <a href="https://x.com/intent/user?screen_name=codersoar" target="_blank">soar</a>.</p>
       </div>
-      <aside class="properties" id="propertiesPanel" aria-label="图形属性" hidden>
+      <aside class="properties" id="propertiesPanel" tabindex="0" aria-label="图形属性" hidden>
         <h2 class="properties-title">图形属性</h2>
         <div class="property-form">
           <div class="property-row"><label id="shapeXLabel" for="shapeX">X</label><input id="shapeX" type="number" inputmode="decimal" step="1" aria-label="左上角 X 坐标"></div>
@@ -123,6 +123,7 @@
           <div class="property-row"><label id="shapeHeightLabel" for="shapeHeight">H</label><input id="shapeHeight" type="number" inputmode="decimal" min="3" step="1" aria-label="高度"></div>
           <div class="property-row" id="lineAngleRow" hidden><label for="lineAngle">°</label><input id="lineAngle" type="number" inputmode="decimal" step="1" aria-label="顺时针角度"></div>
           <button class="aspect-toggle" id="aspectToggle" type="button" aria-pressed="true"><span> · 点击切换</span></button>
+          <button class="copy-shape" id="copyShape" type="button">复制</button>
           <button class="remove-shape" id="removeShape" type="button">移除图形</button>
         </div>
       </aside>
@@ -165,6 +166,7 @@
       const lineAngleRow = document.getElementById('lineAngleRow');
       const lineAngleInput = document.getElementById('lineAngle');
       const aspectToggle = document.getElementById('aspectToggle');
+      const copyShapeButton = document.getElementById('copyShape');
       const removeShapeButton = document.getElementById('removeShape');
 
       let mode = 'select';
@@ -180,6 +182,7 @@
       let colorPickerSessionStartColor = null;
       let hideBaseShapeOutlines = false;
       let hideColoredRegions = false;
+      let copiedShape = null;
       let nextShapeId = 1;
 
       const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -242,6 +245,43 @@
       }
 
       function copyShape(shape) { return { ...shape }; }
+
+      function isBasicShape(shape) { return Boolean(shape) && ['square', 'circle', 'line'].includes(shape.type); }
+
+      function addDuplicateShape(source) {
+        if (!isBasicShape(source)) return null;
+        const duplicate = copyShape(source);
+        duplicate.id = `shape-${nextShapeId}`;
+        if (duplicate.type === 'line') {
+          duplicate.ax += 10;
+          duplicate.ay += 10;
+          duplicate.bx += 10;
+          duplicate.by += 10;
+        } else if (duplicate.type === 'square') {
+          duplicate.x += 10;
+          duplicate.y += 10;
+        } else {
+          duplicate.cx += 10;
+          duplicate.cy += 10;
+        }
+        shapes.push(duplicate);
+        selectedShapeId = duplicate.id;
+        nextShapeId += 1;
+        clearSelection();
+        calculateRegions();
+        return duplicate;
+      }
+
+      function duplicateSelectedShape() { return addDuplicateShape(selectedShape()); }
+
+      function copySelectedShapeToBuffer() {
+        const shape = selectedShape();
+        if (!isBasicShape(shape)) return false;
+        copiedShape = copyShape(shape);
+        return true;
+      }
+
+      function pasteCopiedShape() { return Boolean(addDuplicateShape(copiedShape)); }
 
       function clampShapeToBoard(shape) {
         if (shape.type === 'line') {
@@ -738,6 +778,7 @@
         lineAngleRow.hidden = !isLine;
         aspectToggle.hidden = isLine;
         aspectToggle.disabled = isDraft || isLine;
+        copyShapeButton.disabled = isDraft || !selectedShape();
         aspectToggle.setAttribute('aria-pressed', String(shape.aspectLocked !== false));
         removeShapeButton.disabled = isDraft || !selectedShape();
       }
@@ -984,9 +1025,25 @@
       colorPicker.addEventListener('blur', closeColorPickerSession);
       clearColorButton.addEventListener('click', () => changeSelectedColor(null));
       deleteShapeButton.addEventListener('click', deleteSelectedShape);
+      copyShapeButton.addEventListener('click', duplicateSelectedShape);
       removeShapeButton.addEventListener('click', deleteSelectedShape);
 
+      function isEditableTarget(target) {
+        return target instanceof Element && Boolean(target.closest('input, textarea, [contenteditable="true"]'));
+      }
+
+      function handleCopyPasteShortcut(event) {
+        if (isEditableTarget(event.target) || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+        const key = event.key.toLowerCase();
+        if (key === 'c' && copySelectedShapeToBuffer()) event.preventDefault();
+        if (key === 'v' && pasteCopiedShape()) event.preventDefault();
+      }
+
+      board.addEventListener('keydown', handleCopyPasteShortcut);
+      propertiesPanel.addEventListener('keydown', handleCopyPasteShortcut);
+
       board.addEventListener('pointerdown', (event) => {
+        board.focus({ preventScroll: true });
         if (event.button !== 0) return;
         const p = pointerPosition(event);
         board.setPointerCapture(event.pointerId);

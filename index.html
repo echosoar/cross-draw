@@ -61,6 +61,7 @@
     #preview { fill: none; stroke: rgba(0, 0, 0, .38); stroke-width: 1; stroke-dasharray: 4 4; pointer-events: none; vector-effect: non-scaling-stroke; }
     #selection { fill: none; stroke: #000; stroke-width: 1.5; stroke-dasharray: 5 4; pointer-events: none; vector-effect: non-scaling-stroke; }
     .line-handle { fill: #fff; stroke: #000; stroke-width: 1.5; cursor: grab; vector-effect: non-scaling-stroke; }
+    #shapeRotateHandle { fill: #b9e6ff; stroke: #5a9ec7; }
     /* SVG 的 hidden 属性在部分渲染环境不会移除已绘制的 path；用 display 强制同步。 */
     #preview[hidden], #selection[hidden], .line-handle[hidden] { display: none !important; }
     .help { max-width: 720px; margin: 22px 0 0; color: rgba(0, 0, 0, .48); font-size: 12px; line-height: 1.7; }
@@ -904,9 +905,15 @@
             defs.append(clipPath);
             element.setAttribute('clip-path', `url(#${clipId})`);
           }
-          if (shape.id === selectedShapeId) element.classList.add('selected-shape');
+          if (shape.type === 'line' && shape.id === selectedShapeId) element.classList.add('selected-shape');
           applyShapeGeometry(element, shape);
           shapeLayer.append(element);
+          if (shape.type !== 'line' && shape.id === selectedShapeId) {
+            const selectionOutline = createSvg(elementName);
+            selectionOutline.classList.add('shape', 'selected-shape');
+            applyShapeGeometry(selectionOutline, shape);
+            shapeLayer.append(selectionOutline);
+          }
         });
         shapeLayer.style.visibility = hideBaseShapeOutlines ? 'hidden' : 'visible';
         updateLineHandles();

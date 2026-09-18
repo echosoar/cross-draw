@@ -29,7 +29,7 @@
     .recent-color:disabled { opacity: .24; cursor: not-allowed; }
     .delete, .clear { margin-left: 8px; padding: 0 2px; color: rgba(0, 0, 0, .58); }
     #colorPicker:disabled, .clear:disabled, .delete:disabled { opacity: .24; cursor: not-allowed; }
-    .shape.selected-shape { stroke: #000; stroke-width: 4; stroke-dasharray: 5 4; }
+    .shape.selected-shape { stroke: #000; stroke-width: 2; stroke-dasharray: 5 4; }
     .shape.line-shape { stroke-width: 1; }
     .shape.line-shape.selected-shape { stroke-width: 2; }
     .preview { margin-left: auto; min-height: 36px; padding: 0 6px; color: rgba(0, 0, 0, .58); }
@@ -62,6 +62,7 @@
     #selection { fill: none; stroke: #000; stroke-width: 1.5; stroke-dasharray: 5 4; pointer-events: none; vector-effect: non-scaling-stroke; }
     .line-handle { fill: #fff; stroke: #000; stroke-width: 1.5; cursor: grab; vector-effect: non-scaling-stroke; }
     #shapeRotateHandle { fill: #b9e6ff; stroke: #5a9ec7; }
+    #shapeResizeHandle { cursor: nwse-resize; }
     /* SVG 的 hidden 属性在部分渲染环境不会移除已绘制的 path；用 display 强制同步。 */
     #preview[hidden], #selection[hidden], .line-handle[hidden] { display: none !important; }
     .help { max-width: 720px; margin: 22px 0 0; color: rgba(0, 0, 0, .48); font-size: 12px; line-height: 1.7; }
@@ -888,32 +889,14 @@
       function renderShapes() {
         if (!shapes.some((shape) => shape.id === selectedShapeId)) selectedShapeId = null;
         shapeLayer.replaceChildren();
-        const defs = createSvg('defs');
-        shapeLayer.append(defs);
         shapes.forEach((shape) => {
           const elementName = shape.type === 'line' ? 'line' : (shape.type === 'square' ? 'rect' : 'ellipse');
           const element = createSvg(elementName);
           element.classList.add('shape');
           if (shape.type === 'line') element.classList.add('line-shape');
-          else {
-            const clipId = `shape-outline-clip-${shape.id}`;
-            const clipPath = createSvg('clipPath');
-            const clipGeometry = createSvg(elementName);
-            clipPath.setAttribute('id', clipId);
-            applyShapeGeometry(clipGeometry, shape);
-            clipPath.append(clipGeometry);
-            defs.append(clipPath);
-            element.setAttribute('clip-path', `url(#${clipId})`);
-          }
-          if (shape.type === 'line' && shape.id === selectedShapeId) element.classList.add('selected-shape');
+          if (shape.id === selectedShapeId) element.classList.add('selected-shape');
           applyShapeGeometry(element, shape);
           shapeLayer.append(element);
-          if (shape.type !== 'line' && shape.id === selectedShapeId) {
-            const selectionOutline = createSvg(elementName);
-            selectionOutline.classList.add('shape', 'selected-shape');
-            applyShapeGeometry(selectionOutline, shape);
-            shapeLayer.append(selectionOutline);
-          }
         });
         shapeLayer.style.visibility = hideBaseShapeOutlines ? 'hidden' : 'visible';
         updateLineHandles();

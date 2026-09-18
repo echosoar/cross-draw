@@ -107,7 +107,7 @@
           <svg id="board" viewBox="0 0 1100 700" role="application" tabindex="0" aria-label="白色画板：拖动创建图形，选择工具可移动边框或选中区域">
             <g id="regionLayer"></g>
             <g id="shapeLayer"></g>
-            <g id="overlayLayer"><path id="preview" hidden></path><path id="selection" hidden></path><circle id="lineStartHandle" class="line-handle" data-line-handle="a" r="5" hidden></circle><circle id="lineEndHandle" class="line-handle" data-line-handle="b" r="5" hidden></circle><circle id="shapeResizeHandle" class="line-handle shape-resize-handle" data-shape-resize r="5" hidden></circle></g>
+            <g id="overlayLayer"><path id="preview" hidden></path><path id="selection" hidden></path><circle id="lineStartHandle" class="line-handle" data-line-handle="a" r="5" hidden></circle><circle id="lineEndHandle" class="line-handle" data-line-handle="b" r="5" hidden></circle><circle id="shapeRotateHandle" class="line-handle" data-shape-rotate r="5" hidden></circle><circle id="shapeResizeHandle" class="line-handle shape-resize-handle" data-shape-resize r="5" hidden></circle></g>
           </svg>
         </div>
         <p class="help">选择工具：点击图形边框可选中，拖动边框或其周围 5px 可移动图形。方形、圆形或直线工具：在画板上拖动即可创建图形。</p>
@@ -146,6 +146,7 @@
       const selection = document.getElementById('selection');
       const lineStartHandle = document.getElementById('lineStartHandle');
       const lineEndHandle = document.getElementById('lineEndHandle');
+      const shapeRotateHandle = document.getElementById('shapeRotateHandle');
       const shapeResizeHandle = document.getElementById('shapeResizeHandle');
       const colorPicker = document.getElementById('colorPicker');
       const colorValue = document.getElementById('colorValue');
@@ -194,6 +195,8 @@
       const integerText = (value) => String(integer(value));
       const normalizeAngle = (angle) => ((angle % 360) + 360) % 360;
       const lineAngle = (shape) => normalizeAngle(Math.atan2(shape.by - shape.ay, shape.bx - shape.ax) * 180 / Math.PI);
+      const rotationOf = (shape) => normalizeAngle(shape.rotation || 0);
+      const rotationRadians = (shape) => rotationOf(shape) * Math.PI / 180;
       const pointText = (p) => `${fmt(p.x)} ${fmt(p.y)}`;
       const createSvg = (name) => document.createElementNS(SVG_NS, name);
 
@@ -216,7 +219,7 @@
       function showSelection() { setOverlayVisibility(selection, true); }
 
       function updateBoardCursor() {
-        if (pointerAction && (pointerAction.kind === 'move' || pointerAction.kind === 'line-endpoint' || pointerAction.kind === 'shape-resize')) board.style.cursor = 'grabbing';
+        if (pointerAction && (pointerAction.kind === 'move' || pointerAction.kind === 'line-endpoint' || pointerAction.kind === 'shape-resize' || pointerAction.kind === 'shape-rotate')) board.style.cursor = 'grabbing';
         else board.style.cursor = mode === 'select' ? 'default' : 'crosshair';
       }
 
@@ -233,15 +236,51 @@
 
       document.querySelectorAll('.tool').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
 
+      function shapeFrame(shape) {
+        if (shape.type === 'line') {
+          const left = Math.min(shape.ax, shape.bx);
+          const top = Math.min(shape.ay, shape.by);
+          return { left, top, width: Math.abs(shape.bx - shape.ax), height: Math.abs(shape.by - shape.ay), cx: (shape.ax + shape.bx) / 2, cy: (shape.ay + shape.by) / 2 };
+        }
+        return shape.type === 'square'
+          ? { left: shape.x, top: shape.y, width: shape.width, height: shape.height, cx: shape.x + shape.width / 2, cy: shape.y + shape.height / 2 }
+          : { left: shape.cx - shape.rx, top: shape.cy - shape.ry, width: shape.rx * 2, height: shape.ry * 2, cx: shape.cx, cy: shape.cy };
+      }
+
+      function rotateVector(vector, radians) {
+        const cosine = Math.cos(radians);
+        const sine = Math.sin(radians);
+        return point(cosine * vector.x - sine * vector.y, sine * vector.x + cosine * vector.y);
+      }
+
+      function pointFromLocal(shape, local) {
+        const frame = shapeFrame(shape);
+        const vector = rotateVector(local, rotationRadians(shape));
+        return point(frame.cx + vector.x, frame.cy + vector.y);
+      }
+
+      function pointToLocal(shape, world) {
+        const frame = shapeFrame(shape);
+        return rotateVector(point(world.x - frame.cx, world.y - frame.cy), -rotationRadians(shape));
+      }
+
       function shapeBounds(shape) {
         if (shape.type === 'line') {
           const left = Math.min(shape.ax, shape.bx);
           const top = Math.min(shape.ay, shape.by);
           return { left, top, right: Math.max(shape.ax, shape.bx), bottom: Math.max(shape.ay, shape.by), width: Math.abs(shape.bx - shape.ax), height: Math.abs(shape.by - shape.ay) };
         }
-        return shape.type === 'square'
-          ? { left: shape.x, top: shape.y, right: shape.x + shape.width, bottom: shape.y + shape.height, width: shape.width, height: shape.height }
-          : { left: shape.cx - shape.rx, top: shape.cy - shape.ry, right: shape.cx + shape.rx, bottom: shape.cy + shape.ry, width: shape.rx * 2, height: shape.ry * 2 };
+        const frame = shapeFrame(shape);
+        const radians = rotationRadians(shape);
+        const halfWidth = frame.width / 2;
+        const halfHeight = frame.height / 2;
+        const extentX = shape.type === 'square'
+          ? Math.abs(Math.cos(radians)) * halfWidth + Math.abs(Math.sin(radians)) * halfHeight
+          : Math.hypot(shape.rx * Math.cos(radians), shape.ry * Math.sin(radians));
+        const extentY = shape.type === 'square'
+          ? Math.abs(Math.sin(radians)) * halfWidth + Math.abs(Math.cos(radians)) * halfHeight
+          : Math.hypot(shape.rx * Math.sin(radians), shape.ry * Math.cos(radians));
+        return { left: frame.cx - extentX, top: frame.cy - extentY, right: frame.cx + extentX, bottom: frame.cy + extentY, width: extentX * 2, height: extentY * 2 };
       }
 
       function copyShape(shape) { return { ...shape }; }
@@ -292,14 +331,14 @@
           return;
         }
         const bounds = shapeBounds(shape);
-        const left = clamp(bounds.left, 0, WIDTH - bounds.width);
-        const top = clamp(bounds.top, 0, HEIGHT - bounds.height);
-        if (shape.type === 'square') { shape.x = left; shape.y = top; }
-        else { shape.cx = left + shape.rx; shape.cy = top + shape.ry; }
+        const dx = clamp(0, -bounds.left, WIDTH - bounds.right);
+        const dy = clamp(0, -bounds.top, HEIGHT - bounds.bottom);
+        if (shape.type === 'square') { shape.x += dx; shape.y += dy; }
+        else { shape.cx += dx; shape.cy += dy; }
       }
 
       function setShapeBounds(shape, nextBounds, changedDimension = null) {
-        const current = shapeBounds(shape);
+        const current = shapeFrame(shape);
         let left = Number.isFinite(nextBounds.left) ? integer(nextBounds.left) : integer(current.left);
         let top = Number.isFinite(nextBounds.top) ? integer(nextBounds.top) : integer(current.top);
         let width = Number.isFinite(nextBounds.width) ? Math.max(3, integer(nextBounds.width)) : integer(current.width);
@@ -308,20 +347,17 @@
         const ratio = current.width / current.height || 1;
         if (locked && changedDimension === 'width') height = width / ratio;
         if (locked && changedDimension === 'height') width = height * ratio;
-        left = clamp(left, 0, Math.max(0, WIDTH - width));
-        top = clamp(top, 0, Math.max(0, HEIGHT - height));
-        width = Math.min(width, WIDTH - left);
-        height = Math.min(height, HEIGHT - top);
         if (locked && changedDimension) {
-          if (changedDimension === 'width') height = Math.min(height, width / ratio, HEIGHT - top), width = height * ratio;
-          else width = Math.min(width, height * ratio, WIDTH - left), height = width / ratio;
+          if (changedDimension === 'width') height = width / ratio;
+          else width = height * ratio;
         }
         left = integer(left);
         top = integer(top);
-        width = Math.min(integer(width), WIDTH - left);
-        height = Math.min(integer(height), HEIGHT - top);
+        width = integer(width);
+        height = integer(height);
         if (shape.type === 'square') Object.assign(shape, { x: left, y: top, width, height });
         else Object.assign(shape, { cx: left + width / 2, cy: top + height / 2, rx: width / 2, ry: height / 2 });
+        clampShapeToBoard(shape);
       }
 
       function makeShapeFromDrag(type, start, current) {
@@ -340,8 +376,8 @@
         if (size < 3) return null;
         const left = directionX > 0 ? start.x : start.x - size;
         const top = directionY > 0 ? start.y : start.y - size;
-        if (type === 'square') return { id: `shape-${nextShapeId}`, type, x: left, y: top, width: size, height: size, aspectLocked: true };
-        return { id: `shape-${nextShapeId}`, type, cx: left + size / 2, cy: top + size / 2, rx: size / 2, ry: size / 2, aspectLocked: true };
+        if (type === 'square') return { id: `shape-${nextShapeId}`, type, x: left, y: top, width: size, height: size, rotation: 0, aspectLocked: true };
+        return { id: `shape-${nextShapeId}`, type, cx: left + size / 2, cy: top + size / 2, rx: size / 2, ry: size / 2, rotation: 0, aspectLocked: true };
       }
 
       function previewDrag(start, current) {
@@ -366,23 +402,27 @@
 
       function distanceToShapeBorder(p, shape) {
         if (shape.type === 'line') return distanceToSegment(p, point(shape.ax, shape.ay), point(shape.bx, shape.by));
+        const local = pointToLocal(shape, p);
+        const frame = shapeFrame(shape);
         if (shape.type === 'circle') {
           const segments = 96;
           let nearest = Infinity;
-          let previous = point(shape.cx + shape.rx, shape.cy);
+          let previous = point(shape.rx, 0);
           for (let i = 1; i <= segments; i += 1) {
             const theta = Math.PI * 2 * i / segments;
-            const current = point(shape.cx + shape.rx * Math.cos(theta), shape.cy + shape.ry * Math.sin(theta));
-            nearest = Math.min(nearest, distanceToSegment(p, previous, current));
+            const current = point(shape.rx * Math.cos(theta), shape.ry * Math.sin(theta));
+            nearest = Math.min(nearest, distanceToSegment(local, previous, current));
             previous = current;
           }
           return nearest;
         }
-        const a = point(shape.x, shape.y);
-        const b = point(shape.x + shape.width, shape.y);
-        const c = point(shape.x + shape.width, shape.y + shape.height);
-        const d = point(shape.x, shape.y + shape.height);
-        return Math.min(distanceToSegment(p, a, b), distanceToSegment(p, b, c), distanceToSegment(p, c, d), distanceToSegment(p, d, a));
+        const halfWidth = frame.width / 2;
+        const halfHeight = frame.height / 2;
+        const a = point(-halfWidth, -halfHeight);
+        const b = point(halfWidth, -halfHeight);
+        const c = point(halfWidth, halfHeight);
+        const d = point(-halfWidth, halfHeight);
+        return Math.min(distanceToSegment(local, a, b), distanceToSegment(local, b, c), distanceToSegment(local, c, d), distanceToSegment(local, d, a));
       }
 
       function closestBorderShape(p) {
@@ -403,8 +443,20 @@
           const reverseDirection = Math.abs(first.ax - second.bx) < EPS && Math.abs(first.ay - second.by) < EPS && Math.abs(first.bx - second.ax) < EPS && Math.abs(first.by - second.ay) < EPS;
           return sameDirection || reverseDirection;
         }
-        if (first.type === 'square') return Math.abs(first.x - second.x) < EPS && Math.abs(first.y - second.y) < EPS && Math.abs(first.width - second.width) < EPS && Math.abs(first.height - second.height) < EPS;
-        return Math.abs(first.cx - second.cx) < EPS && Math.abs(first.cy - second.cy) < EPS && Math.abs(first.rx - second.rx) < EPS && Math.abs(first.ry - second.ry) < EPS;
+        const rotationDifference = Math.abs(normalizeAngle(rotationOf(first) - rotationOf(second)));
+        if (first.type === 'square') return Math.abs(first.x - second.x) < EPS && Math.abs(first.y - second.y) < EPS && Math.abs(first.width - second.width) < EPS && Math.abs(first.height - second.height) < EPS && (rotationDifference < EPS || Math.abs(rotationDifference - 360) < EPS);
+        const isCircle = Math.abs(first.rx - first.ry) < EPS && Math.abs(second.rx - second.ry) < EPS;
+        return Math.abs(first.cx - second.cx) < EPS && Math.abs(first.cy - second.cy) < EPS && Math.abs(first.rx - second.rx) < EPS && Math.abs(first.ry - second.ry) < EPS && (isCircle || rotationDifference < EPS || Math.abs(rotationDifference - 360) < EPS);
+      }
+
+      function ellipsePoint(ellipse, theta) {
+        const offset = rotateVector(point(ellipse.rx * Math.cos(theta), ellipse.ry * Math.sin(theta)), ellipse.rotation);
+        return point(ellipse.c.x + offset.x, ellipse.c.y + offset.y);
+      }
+
+      function ellipseImplicit(ellipse, p) {
+        const local = rotateVector(point(p.x - ellipse.c.x, p.y - ellipse.c.y), -ellipse.rotation);
+        return local.x * local.x / (ellipse.rx * ellipse.rx) + local.y * local.y / (ellipse.ry * ellipse.ry) - 1;
       }
 
       function primitivesForShapes() {
@@ -414,16 +466,15 @@
           if (shape.type === 'line') {
             primitives.push({ id: `${shape.id}-line`, shapeId: shape.id, type: 'line', a: point(shape.ax, shape.ay), b: point(shape.bx, shape.by), params: [0, 1] });
           } else if (shape.type === 'square') {
-            const corners = [
-              point(shape.x, shape.y), point(shape.x + shape.width, shape.y),
-              point(shape.x + shape.width, shape.y + shape.height), point(shape.x, shape.y + shape.height)
-            ];
+            const frame = shapeFrame(shape);
+            const halfWidth = frame.width / 2;
+            const halfHeight = frame.height / 2;
+            const corners = [point(-halfWidth, -halfHeight), point(halfWidth, -halfHeight), point(halfWidth, halfHeight), point(-halfWidth, halfHeight)].map((corner) => pointFromLocal(shape, corner));
             for (let i = 0; i < 4; i += 1) primitives.push({ id: `${shape.id}-edge-${i}`, shapeId: shape.id, type: 'line', a: corners[i], b: corners[(i + 1) % 4], params: [0, 1] });
           } else {
-            // A per-shape split avoids turning a point-only tangency into a shared graph vertex.
             const sequence = Number(shape.id.replace('shape-', '')) || 1;
             const start = ((sequence * 0.61803398875) % 1) * Math.PI * 2;
-            primitives.push({ id: `${shape.id}-ellipse`, shapeId: shape.id, type: 'ellipse', c: point(shape.cx, shape.cy), rx: shape.rx, ry: shape.ry, rangeStart: start, rangeEnd: start + Math.PI * 2, params: [start, start + Math.PI, start + Math.PI * 2] });
+            primitives.push({ id: `${shape.id}-ellipse`, shapeId: shape.id, type: 'ellipse', c: point(shape.cx, shape.cy), rx: shape.rx, ry: shape.ry, rotation: rotationRadians(shape), rangeStart: start, rangeEnd: start + Math.PI * 2, params: [start, start + Math.PI, start + Math.PI * 2] });
           }
         });
         return primitives;
@@ -460,13 +511,12 @@
       }
 
       function lineEllipseIntersections(line, ellipse) {
-        const dx = line.b.x - line.a.x;
-        const dy = line.b.y - line.a.y;
-        const fx = line.a.x - ellipse.c.x;
-        const fy = line.a.y - ellipse.c.y;
-        const a = dx * dx / (ellipse.rx * ellipse.rx) + dy * dy / (ellipse.ry * ellipse.ry);
-        const b = 2 * (fx * dx / (ellipse.rx * ellipse.rx) + fy * dy / (ellipse.ry * ellipse.ry));
-        const c = fx * fx / (ellipse.rx * ellipse.rx) + fy * fy / (ellipse.ry * ellipse.ry) - 1;
+        const direction = point(line.b.x - line.a.x, line.b.y - line.a.y);
+        const offset = rotateVector(point(line.a.x - ellipse.c.x, line.a.y - ellipse.c.y), -ellipse.rotation);
+        const localDirection = rotateVector(direction, -ellipse.rotation);
+        const a = localDirection.x * localDirection.x / (ellipse.rx * ellipse.rx) + localDirection.y * localDirection.y / (ellipse.ry * ellipse.ry);
+        const b = 2 * (offset.x * localDirection.x / (ellipse.rx * ellipse.rx) + offset.y * localDirection.y / (ellipse.ry * ellipse.ry));
+        const c = offset.x * offset.x / (ellipse.rx * ellipse.rx) + offset.y * offset.y / (ellipse.ry * ellipse.ry) - 1;
         const discriminant = b * b - 4 * a * c;
         if (discriminant < -EPS) return [];
         const root = Math.sqrt(Math.max(0, discriminant));
@@ -474,7 +524,7 @@
         const result = [];
         candidates.forEach((t) => {
           if (t >= -EPS && t <= 1 + EPS) {
-            const p = point(line.a.x + clamp(t, 0, 1) * dx, line.a.y + clamp(t, 0, 1) * dy);
+            const p = point(line.a.x + clamp(t, 0, 1) * direction.x, line.a.y + clamp(t, 0, 1) * direction.y);
             if (!result.some((other) => distance(p, other) < 1e-5)) result.push(p);
           }
         });
@@ -482,13 +532,9 @@
       }
 
       function ellipseEllipseIntersections(first, second) {
-        const valueAt = (theta) => {
-          const x = first.c.x + first.rx * Math.cos(theta);
-          const y = first.c.y + first.ry * Math.sin(theta);
-          return (x - second.c.x) ** 2 / (second.rx * second.rx) + (y - second.c.y) ** 2 / (second.ry * second.ry) - 1;
-        };
+        const valueAt = (theta) => ellipseImplicit(second, ellipsePoint(first, theta));
         const intersections = [];
-        const slices = 720;
+        const slices = 1440;
         let previousTheta = 0;
         let previousValue = valueAt(previousTheta);
         for (let i = 1; i <= slices; i += 1) {
@@ -497,13 +543,12 @@
           if (previousValue * value < 0) {
             let low = previousTheta;
             let high = theta;
-            for (let step = 0; step < 32; step += 1) {
+            for (let step = 0; step < 40; step += 1) {
               const middle = (low + high) / 2;
               if (valueAt(low) * valueAt(middle) <= 0) high = middle;
               else low = middle;
             }
-            const root = (low + high) / 2;
-            const p = point(first.c.x + first.rx * Math.cos(root), first.c.y + first.ry * Math.sin(root));
+            const p = ellipsePoint(first, (low + high) / 2);
             if (!intersections.some((other) => distance(p, other) < 1e-4)) intersections.push(p);
           }
           previousTheta = theta;
@@ -519,7 +564,8 @@
           const denominator = dx * dx + dy * dy;
           return clamp(((p.x - primitive.a.x) * dx + (p.y - primitive.a.y) * dy) / denominator, 0, 1);
         }
-        let theta = Math.atan2((p.y - primitive.c.y) / primitive.ry, (p.x - primitive.c.x) / primitive.rx);
+        const local = rotateVector(point(p.x - primitive.c.x, p.y - primitive.c.y), -primitive.rotation);
+        let theta = Math.atan2(local.y / primitive.ry, local.x / primitive.rx);
         if (theta < 0) theta += Math.PI * 2;
         while (theta < primitive.rangeStart - EPS) theta += Math.PI * 2;
         return theta;
@@ -532,15 +578,18 @@
 
       function pointAt(primitive, parameter) {
         if (primitive.type === 'line') return point(primitive.a.x + (primitive.b.x - primitive.a.x) * parameter, primitive.a.y + (primitive.b.y - primitive.a.y) * parameter);
-        return point(primitive.c.x + primitive.rx * Math.cos(parameter), primitive.c.y + primitive.ry * Math.sin(parameter));
+        return ellipsePoint(primitive, parameter);
+      }
+
+      function tangentVector(primitive, parameter, direction = 1) {
+        if (primitive.type === 'line') return point((primitive.b.x - primitive.a.x) * direction, (primitive.b.y - primitive.a.y) * direction);
+        const local = point(-primitive.rx * Math.sin(parameter) * direction, primitive.ry * Math.cos(parameter) * direction);
+        return rotateVector(local, primitive.rotation);
       }
 
       function tangentAngle(primitive, parameter, direction) {
-        let dx;
-        let dy;
-        if (primitive.type === 'line') { dx = primitive.b.x - primitive.a.x; dy = primitive.b.y - primitive.a.y; }
-        else { dx = -primitive.rx * Math.sin(parameter); dy = primitive.ry * Math.cos(parameter); }
-        return Math.atan2(-dy * direction, dx * direction);
+        const tangent = tangentVector(primitive, parameter, direction);
+        return Math.atan2(-tangent.y, tangent.x);
       }
 
       function buildHalfEdges() {
@@ -580,7 +629,7 @@
           const endpoints = [from.key, to.key].sort().join(':');
           if (primitive.type === 'line') return `line:${endpoints}`;
           const mid = pointAt(primitive, (start + end) / 2);
-          return `arc:${fmt(primitive.c.x)},${fmt(primitive.c.y)},${fmt(primitive.rx)},${fmt(primitive.ry)}:${endpoints}:${keyForPoint(mid)}`;
+          return `arc:${fmt(primitive.c.x)},${fmt(primitive.c.y)},${fmt(primitive.rx)},${fmt(primitive.ry)},${fmt(primitive.rotation)}:${endpoints}:${keyForPoint(mid)}`;
         };
         primitives.forEach((primitive) => {
           const maximum = primitive.type === 'line' ? 1 : primitive.rangeEnd;
@@ -638,7 +687,7 @@
         const ry = fmt(edge.primitive.ry);
         const delta = edge.end - edge.start;
         const large = Math.abs(delta) > Math.PI + EPS ? 1 : 0;
-        return `A ${rx} ${ry} 0 ${large} ${delta > 0 ? 1 : 0} ${pointText(edge.to.p)}`;
+        return `A ${rx} ${ry} ${fmt(edge.primitive.rotation * 180 / Math.PI)} ${large} ${delta > 0 ? 1 : 0} ${pointText(edge.to.p)}`;
       }
 
       function pathForCycle(cycle) {
@@ -656,8 +705,9 @@
         } else {
           const theta = (edge.start + edge.end) / 2;
           p = pointAt(edge.primitive, theta);
-          dx = -edge.primitive.rx * Math.sin(theta) * edge.direction;
-          dy = edge.primitive.ry * Math.cos(theta) * edge.direction;
+          const tangent = tangentVector(edge.primitive, theta, edge.direction);
+          dx = tangent.x;
+          dy = tangent.y;
         }
         const length = Math.hypot(dx, dy) || 1;
         return point(p.x + dy / length * 0.75, p.y - dx / length * 0.75);
@@ -665,8 +715,10 @@
 
       function containsPoint(shape, p) {
         if (shape.type === 'line') return false;
-        if (shape.type === 'square') return p.x > shape.x + EPS && p.x < shape.x + shape.width - EPS && p.y > shape.y + EPS && p.y < shape.y + shape.height - EPS;
-        return (p.x - shape.cx) ** 2 / (shape.rx * shape.rx) + (p.y - shape.cy) ** 2 / (shape.ry * shape.ry) < 1 - EPS;
+        const local = pointToLocal(shape, p);
+        const frame = shapeFrame(shape);
+        if (shape.type === 'square') return local.x > -frame.width / 2 + EPS && local.x < frame.width / 2 - EPS && local.y > -frame.height / 2 + EPS && local.y < frame.height / 2 - EPS;
+        return local.x * local.x / (shape.rx * shape.rx) + local.y * local.y / (shape.ry * shape.ry) < 1 - EPS;
       }
 
       function signatureFor(p) { return shapes.map((shape) => containsPoint(shape, p) ? '1' : '0').join(''); }
@@ -690,7 +742,7 @@
       function pathKey(cycle) {
         return cycle.edges.map((edge) => {
           if (edge.primitive.type === 'line') return `L:${fmt(edge.from.p.x)},${fmt(edge.from.p.y)}>${fmt(edge.to.p.x)},${fmt(edge.to.p.y)}`;
-          return `E:${fmt(edge.primitive.c.x)},${fmt(edge.primitive.c.y)},${fmt(edge.primitive.rx)},${fmt(edge.primitive.ry)}:${fmt(edge.start)}>${fmt(edge.end)}`;
+          return `E:${fmt(edge.primitive.c.x)},${fmt(edge.primitive.c.y)},${fmt(edge.primitive.rx)},${fmt(edge.primitive.ry)},${fmt(edge.primitive.rotation)}:${fmt(edge.start)}>${fmt(edge.end)}`;
         }).join('|');
       }
 
@@ -760,22 +812,23 @@
           shapeWidthInput.setAttribute('aria-label', '终点 X 坐标');
           shapeHeightInput.setAttribute('aria-label', '终点 Y 坐标');
         } else {
-          const bounds = shapeBounds(shape);
+          const frame = shapeFrame(shape);
           shapeXLabel.textContent = 'X';
           shapeYLabel.textContent = 'Y';
           shapeWidthLabel.textContent = 'W';
           shapeHeightLabel.textContent = 'H';
-          shapeXInput.value = integerText(bounds.left);
-          shapeYInput.value = integerText(bounds.top);
-          shapeWidthInput.value = integerText(bounds.width);
-          shapeHeightInput.value = integerText(bounds.height);
+          shapeXInput.value = integerText(frame.left);
+          shapeYInput.value = integerText(frame.top);
+          shapeWidthInput.value = integerText(frame.width);
+          shapeHeightInput.value = integerText(frame.height);
+          lineAngleInput.value = fmt(rotationOf(shape));
           shapeXInput.setAttribute('aria-label', '左上角 X 坐标');
           shapeYInput.setAttribute('aria-label', '左上角 Y 坐标');
           shapeWidthInput.setAttribute('aria-label', '宽度');
           shapeHeightInput.setAttribute('aria-label', '高度');
         }
         [shapeXInput, shapeYInput, shapeWidthInput, shapeHeightInput, lineAngleInput].forEach((control) => { control.disabled = isDraft; });
-        lineAngleRow.hidden = !isLine;
+        lineAngleRow.hidden = false;
         aspectToggle.hidden = isLine;
         aspectToggle.disabled = isDraft || isLine;
         copyShapeButton.disabled = isDraft || !selectedShape();
@@ -784,6 +837,7 @@
       }
 
       function applyShapeGeometry(element, shape) {
+        element.removeAttribute('transform');
         if (shape.type === 'line') {
           element.setAttribute('x1', shape.ax);
           element.setAttribute('y1', shape.ay);
@@ -794,31 +848,39 @@
           element.setAttribute('y', shape.y);
           element.setAttribute('width', shape.width);
           element.setAttribute('height', shape.height);
+          const frame = shapeFrame(shape);
+          element.setAttribute('transform', `rotate(${fmt(rotationOf(shape))} ${fmt(frame.cx)} ${fmt(frame.cy)})`);
         } else {
           element.setAttribute('cx', shape.cx);
           element.setAttribute('cy', shape.cy);
           element.setAttribute('rx', shape.rx);
           element.setAttribute('ry', shape.ry);
+          element.setAttribute('transform', `rotate(${fmt(rotationOf(shape))} ${fmt(shape.cx)} ${fmt(shape.cy)})`);
         }
       }
 
       function updateLineHandles() {
         const shape = selectedShape();
         const showLineHandles = shape && shape.type === 'line';
-        const showResizeHandle = shape && shape.type !== 'line';
+        const showShapeHandles = shape && shape.type !== 'line';
         setOverlayVisibility(lineStartHandle, showLineHandles);
         setOverlayVisibility(lineEndHandle, showLineHandles);
-        setOverlayVisibility(shapeResizeHandle, showResizeHandle);
+        setOverlayVisibility(shapeRotateHandle, showShapeHandles);
+        setOverlayVisibility(shapeResizeHandle, showShapeHandles);
         if (showLineHandles) {
           lineStartHandle.setAttribute('cx', shape.ax);
           lineStartHandle.setAttribute('cy', shape.ay);
           lineEndHandle.setAttribute('cx', shape.bx);
           lineEndHandle.setAttribute('cy', shape.by);
         }
-        if (showResizeHandle) {
-          const bounds = shapeBounds(shape);
-          shapeResizeHandle.setAttribute('cx', bounds.right);
-          shapeResizeHandle.setAttribute('cy', bounds.bottom);
+        if (showShapeHandles) {
+          const frame = shapeFrame(shape);
+          const resizePoint = pointFromLocal(shape, point(frame.width / 2, frame.height / 2));
+          const rotatePoint = pointFromLocal(shape, point(frame.width / 2, -frame.height / 2));
+          shapeResizeHandle.setAttribute('cx', resizePoint.x);
+          shapeResizeHandle.setAttribute('cy', resizePoint.y);
+          shapeRotateHandle.setAttribute('cx', rotatePoint.x);
+          shapeRotateHandle.setAttribute('cy', rotatePoint.y);
         }
       }
 
@@ -991,8 +1053,13 @@
           calculateRegions();
           return;
         }
-        const bounds = shapeBounds(shape);
-        const next = { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
+        const frame = shapeFrame(shape);
+        const next = { left: frame.left, top: frame.top, width: frame.width, height: frame.height };
+        if (property === 'angle') {
+          shape.rotation = normalizeAngle(number);
+          calculateRegions();
+          return;
+        }
         if (property === 'x') next.left = number;
         if (property === 'y') next.top = number;
         if (property === 'width') next.width = number;
@@ -1047,6 +1114,18 @@
         if (event.button !== 0) return;
         const p = pointerPosition(event);
         board.setPointerCapture(event.pointerId);
+        const rotateTarget = event.target.closest ? event.target.closest('[data-shape-rotate]') : null;
+        const selectedShapeForRotate = selectedShape();
+        if (rotateTarget && selectedShapeForRotate && selectedShapeForRotate.type !== 'line') {
+          const frame = shapeFrame(selectedShapeForRotate);
+          pointerAction = { kind: 'shape-rotate', pointerId: event.pointerId, shapeId: selectedShapeForRotate.id, initialRotation: rotationOf(selectedShapeForRotate), startAngle: Math.atan2(p.y - frame.cy, p.x - frame.cx) };
+          clearSelection();
+          hideColoredRegions = true;
+          renderRegions();
+          updateBoardCursor();
+          event.preventDefault();
+          return;
+        }
         const resizeTarget = event.target.closest ? event.target.closest('[data-shape-resize]') : null;
         const selectedShapeForResize = selectedShape();
         if (resizeTarget && selectedShapeForResize && selectedShapeForResize.type !== 'line') {
@@ -1077,8 +1156,8 @@
           draftShape = mode === 'line'
             ? { type: mode, ax: p.x, ay: p.y, bx: p.x, by: p.y }
             : (mode === 'square'
-              ? { type: mode, x: p.x, y: p.y, width: 0, height: 0, aspectLocked: true }
-              : { type: mode, cx: p.x, cy: p.y, rx: 0, ry: 0, aspectLocked: true });
+              ? { type: mode, x: p.x, y: p.y, width: 0, height: 0, rotation: 0, aspectLocked: true }
+              : { type: mode, cx: p.x, cy: p.y, rx: 0, ry: 0, rotation: 0, aspectLocked: true });
           pointerAction = { kind: 'create', start: p, pointerId: event.pointerId };
           updatePropertiesPanel();
           previewDrag(p, p);
@@ -1112,16 +1191,26 @@
         else {
           const shape = shapes.find((item) => item.id === pointerAction.shapeId);
           if (!shape) return;
+          if (pointerAction.kind === 'shape-rotate') {
+            const frame = shapeFrame(shape);
+            let degrees = pointerAction.initialRotation + (Math.atan2(p.y - frame.cy, p.x - frame.cx) - pointerAction.startAngle) * 180 / Math.PI;
+            if (event.shiftKey) degrees = Math.round(degrees / 15) * 15;
+            shape.rotation = normalizeAngle(degrees);
+            renderShapes();
+            return;
+          }
           if (pointerAction.kind === 'shape-resize') {
-            const bounds = shapeBounds(shape);
-            const width = Math.max(3, p.x - bounds.left);
-            const height = Math.max(3, p.y - bounds.top);
+            const frame = shapeFrame(shape);
+            const anchor = pointFromLocal(shape, point(-frame.width / 2, -frame.height / 2));
+            const local = rotateVector(point(p.x - anchor.x, p.y - anchor.y), -rotationRadians(shape));
+            const width = Math.max(3, local.x);
+            const height = Math.max(3, local.y);
+            const next = { left: frame.left, top: frame.top, width, height };
             if (shape.aspectLocked !== false) {
-              const scaleWidth = width / bounds.width;
-              const scaleHeight = height / bounds.height;
-              const changedDimension = scaleWidth >= scaleHeight ? 'width' : 'height';
-              setShapeBounds(shape, { left: bounds.left, top: bounds.top, width, height }, changedDimension);
-            } else setShapeBounds(shape, { left: bounds.left, top: bounds.top, width, height });
+              const scaleWidth = width / frame.width;
+              const scaleHeight = height / frame.height;
+              setShapeBounds(shape, next, scaleWidth >= scaleHeight ? 'width' : 'height');
+            } else setShapeBounds(shape, next);
             renderShapes();
             return;
           }
@@ -1157,7 +1246,7 @@
             nextShapeId += 1;
             calculateRegions();
           } else updatePropertiesPanel();
-        } else if (pointerAction.kind === 'move' || pointerAction.kind === 'line-endpoint' || pointerAction.kind === 'shape-resize') {
+        } else if (pointerAction.kind === 'move' || pointerAction.kind === 'line-endpoint' || pointerAction.kind === 'shape-resize' || pointerAction.kind === 'shape-rotate') {
           hideColoredRegions = false;
           calculateRegions();
         }
